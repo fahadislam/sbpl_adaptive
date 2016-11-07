@@ -21,6 +21,8 @@ class MultiRepAdaptiveDiscreteSpaceInformation3D :
 public:
 
     virtual int GetDimIDForPosition(Position3D p) = 0;
+    virtual bool DimEnabledAtPosition(Position3D p, int dim) = 0;
+    virtual void DimsAtPosition(Position3D p, std::vector<int> &dims) = 0;
 
     virtual int GetTrackingCostToGoalForPosition(Position3D p) = 0;
 

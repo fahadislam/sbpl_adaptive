@@ -26,7 +26,7 @@ class AdaptiveGrid
 {
 public:
 
-    AdaptiveGrid(int ldID) : ldID_(ldID), trackMode_(false) { }
+    AdaptiveGrid() : trackMode_(false) { }
 
     virtual ~AdaptiveGrid() { }
 
@@ -50,9 +50,15 @@ public:
         int rad,
         int near_rad) = 0;
 
-    virtual bool isInBounds(const std::vector<int> &coord) const = 0;
+    virtual bool isInBounds(const std::vector<int> &coord) const
+    {
+        return false;
+    }
 
-    virtual AdaptiveGridCell getCell(const std::vector<int> &coord) const = 0;
+    virtual AdaptiveGridCell getCell(const std::vector<int> &coord) const
+    {
+        return AdaptiveGridCell();
+    }
 
     virtual int getCellPlanningDim(const std::vector<int> &coord) const = 0;
 
@@ -65,8 +71,6 @@ protected:
 
     //double near_rad_;
     bool trackMode_;
-
-    int ldID_;
 
     virtual void resetTrackingGrid() = 0;
 
@@ -88,10 +92,6 @@ protected:
     virtual void setCellCostToGoal(
         const std::vector<int> &coord,
         unsigned int costToGoal) = 0;
-
-    virtual void setDefaultDimID(
-        const std::vector<int> &coord,
-        int dimID) = 0;
 };
 
 } // namespace adim
