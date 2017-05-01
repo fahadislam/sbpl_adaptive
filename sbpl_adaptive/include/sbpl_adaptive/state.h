@@ -48,6 +48,8 @@ struct AdaptiveHashEntry
     size_t stateID;           // the state ID
     size_t heur;              // the heuristic value
     char dimID;               // the dimensionality ID
+    bool userFlag = false;
+    AdaptiveHashEntry* BP;
     AdaptiveState *stateData; // the state data specific to this dimensionality
 
     template <class T>

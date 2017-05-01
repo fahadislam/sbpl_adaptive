@@ -33,6 +33,7 @@ struct EnvStateData
         HashTableSize = 32 * 1024;
         goalHashEntry = NULL;
         startHashEntry = NULL;
+        userHashEntry = NULL;
     }
 
     AbstractGoal *goaldata;
@@ -40,6 +41,7 @@ struct EnvStateData
     // start and goal entries
     AdaptiveHashEntry *goalHashEntry;
     AdaptiveHashEntry *startHashEntry;
+    AdaptiveHashEntry *userHashEntry;
 
     // hash tables
     size_t HashTableSize;
@@ -67,7 +69,7 @@ public:
     AdaptiveHashEntry *GetState(size_t stateID) const;
     int GetDimID(size_t stateID);
 
-    const EnvStateData *getEnvStateDataPtr() { return &data_; }
+    EnvStateData *getEnvStateDataPtr() { return &data_; }
 
     const void *getEnvDataPtr() { return env_data_.get(); }
 
@@ -104,6 +106,8 @@ public:
     int SetStartConfig(int dimID, const void *representation_specific_data);
     int SetGoalCoords(int dimID, const adim::AdaptiveState *state);
     int SetGoalConfig(int dimID, const void *goal_representation_specific_continuous_data);
+    int SetUserCoords(int dimID, const adim::AdaptiveState *state);
+    int SetUserConfig(int dimID, const void *representation_specific_data);
 
     int SetAbstractGoal(AbstractGoal *abstract_goal);
 

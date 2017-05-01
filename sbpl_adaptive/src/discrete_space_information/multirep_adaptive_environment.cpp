@@ -169,6 +169,42 @@ int MultiRepAdaptiveDiscreteSpaceInformation::SetStartConfig(
     return StartID;
 }
 
+int MultiRepAdaptiveDiscreteSpaceInformation::SetUserCoords(
+    int dimID,
+    const AdaptiveState *state)
+{
+    ROS_INFO_NAMED(GLOG, "setting user coordinates");
+    int UserConfigID = representations_[dimID]->SetUserCoords(state);
+    if (!representations_[dimID]->isExecutable()) {
+        ROS_WARN_NAMED(GLOG, "the start representation is of non-executable type!");
+    }
+    if (UserConfigID == -1) {
+        return -1;
+    }
+    this->data_.userHashEntry = GetState(UserConfigID);
+    ROS_INFO_NAMED(GLOG, "start set %d", UserConfigID);
+    return UserConfigID;
+}
+
+int MultiRepAdaptiveDiscreteSpaceInformation::SetUserConfig(
+    int dimID,
+    const void *representation_specific_cont_data)
+{
+    printf("SETTING USER CONFIG IN MULTIREP\n");
+    ROS_INFO_NAMED(GLOG, "setting user configuration");
+    int UserID = representations_[dimID]->SetUserConfig(
+            representation_specific_cont_data);
+    if (!representations_[dimID]->isExecutable()) {
+        ROS_WARN_NAMED(GLOG, "the user representation is of non-executable type!");
+    }
+    if (UserID == -1) {
+        return -1;
+    }
+    this->data_.userHashEntry = GetState(UserID);
+    ROS_INFO_NAMED(GLOG, "user user set %d", UserID);
+    return UserID;
+}
+
 void MultiRepAdaptiveDiscreteSpaceInformation::InsertMetaGoalHashEntry(
     AdaptiveHashEntry *entry)
 {
@@ -215,6 +251,7 @@ MultiRepAdaptiveDiscreteSpaceInformation::MultiRepAdaptiveDiscreteSpaceInformati
     data_.StateID2HashEntry.clear();
     data_.goalHashEntry = NULL;
     data_.startHashEntry = NULL;
+    data_.userHashEntry = NULL;
     env_data_.reset();
     BestTracked_StateID = -1;
     BestTracked_Cost = INFINITECOST;

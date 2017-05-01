@@ -45,6 +45,9 @@ public:
 
     virtual int SetStartConfig(const void *cont_data) = 0;
 
+    virtual int SetUserCoords(const AdaptiveState *disc_data) = 0;
+
+    virtual int SetUserConfig(const void *cont_data) = 0;
     // return the state ID of the created goal state
     virtual int SetGoalCoords(const AdaptiveState *disc_data) = 0;
 
