@@ -205,6 +205,12 @@ int MultiRepAdaptiveDiscreteSpaceInformation::SetUserConfig(
     return UserID;
 }
 
+void MultiRepAdaptiveDiscreteSpaceInformation::setStuckState(int state_id)
+{
+    AdaptiveHashEntry *entry = GetState(state_id);
+    representations_[entry->dimID]->setStuckState(state_id);
+}
+
 void MultiRepAdaptiveDiscreteSpaceInformation::InsertMetaGoalHashEntry(
     AdaptiveHashEntry *entry)
 {

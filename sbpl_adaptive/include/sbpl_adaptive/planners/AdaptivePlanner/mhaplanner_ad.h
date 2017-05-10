@@ -162,6 +162,15 @@ private:
     sbpl::clock::duration m_elapsed;    ///< current amount of seconds
 
     int m_call_number;
+
+    std::vector<std::deque< std::pair<int, int> >> m_window;
+    std::vector<std::vector<int>> m_best_seen_h;
+    std::vector<int> m_expansions_per_queue;
+    int m_window_size;
+    int m_diff_window_size;
+    int m_min_improvement;
+    int m_original_hcount;
+
     int m_last_start_state_id;
     int m_last_goal_state_id;
 
@@ -182,7 +191,8 @@ private:
 
     bool time_limit_reached() const;
 
-    int num_heuristics() const { return m_hcount + 1; }
+    int num_heuristics() const { return m_hcount; }
+    void add_dynamic_heuristic();
     MHASearchState* get_state(int state_id);
     void init_state(MHASearchState* state, size_t mha_state_idx, int state_id);
     void reinit_state(MHASearchState* state);
@@ -190,6 +200,9 @@ private:
     void clear_open_lists();
     void clear();
     long int compute_key(MHASearchState* state, int hidx);
+    bool in_local_minima(MHASearchState* state, int hidx);
+    void update_progress(MHASearchState* state, int hidx);
+    void check_user_guidance(MHASearchState* state, int hidx);
     void expand(MHASearchState* state, int hidx);
     MHASearchState* state_from_open_state(AbstractSearchState* open_state);
     int compute_heuristic(int state_id, int hidx);

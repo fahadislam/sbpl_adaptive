@@ -108,6 +108,7 @@ public:
     int SetGoalConfig(int dimID, const void *goal_representation_specific_continuous_data);
     int SetUserCoords(int dimID, const adim::AdaptiveState *state);
     int SetUserConfig(int dimID, const void *representation_specific_data);
+    void setStuckState(int state_id);
 
     int SetAbstractGoal(AbstractGoal *abstract_goal);
 
