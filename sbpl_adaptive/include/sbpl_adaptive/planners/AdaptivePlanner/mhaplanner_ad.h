@@ -3,7 +3,7 @@
 
 // standard includes
 #include <unordered_map>
-
+#include <fstream>
 // system includes
 #include <sbpl/headers.h>
 #include <smpl/time.h>
@@ -165,14 +165,23 @@ private:
 
     std::vector<std::deque< std::pair<int, int> >> m_window;
     std::vector<std::vector<int>> m_best_seen_h;
+    std::vector<int> m_wait_counter;
     std::vector<int> m_expansions_per_queue;
+
     int m_window_size;
     int m_diff_window_size;
     int m_min_improvement;
     int m_original_hcount;
 
+    std::ofstream file_writer_base_unguided;
+    std::ofstream file_writer_base;
+    std::ofstream file_writer_dyn;
+
     int m_last_start_state_id;
     int m_last_goal_state_id;
+
+    bool m_user_guidance;
+    // int minima_num;
 
     bool set_heur_;
 
@@ -203,6 +212,8 @@ private:
     bool in_local_minima(MHASearchState* state, int hidx);
     void update_progress(MHASearchState* state, int hidx);
     void check_user_guidance(MHASearchState* state, int hidx);
+    void store_heuristic(MHASearchState* state, int hidx, bool minima_original, bool minima_dynamic);
+    void store_heuristic(MHASearchState* state, int hidx);
     void expand(MHASearchState* state, int hidx);
     MHASearchState* state_from_open_state(AbstractSearchState* open_state);
     int compute_heuristic(int state_id, int hidx);
