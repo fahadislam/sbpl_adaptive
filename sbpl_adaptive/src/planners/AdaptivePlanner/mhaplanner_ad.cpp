@@ -81,7 +81,6 @@ MHAPlanner_AD::MHAPlanner_AD(
     m_last_start_state_id(-1),
     m_last_goal_state_id(-1),
     m_user_guidance(true)
-    // minima_num(0)
 {
     environment_ = space;
 
@@ -125,23 +124,6 @@ MHAPlanner_AD::MHAPlanner_AD(
         ss << ']';
         ROS_DEBUG_NAMED(SLOG, "  %s", ss.str().c_str());
     }
-
-    // if (space_->isInTrackingMode()) {
-    // stats
-    if (m_user_guidance) {
-        std::string base_filename = "/usr0/home/fi/Research/RSS/stats/base.txt";
-        std::string dyn_filename = "/usr0/home/fi/Research/RSS/stats/dyn.txt";
-
-        file_writer_base.open(base_filename);
-        file_writer_dyn.open(dyn_filename);
-    }
-    else {
-        std::string base_filename_unguided = "/usr0/home/fi/Research/RSS/stats/base_unguided.txt";
-        file_writer_base_unguided.open(base_filename_unguided);
-    }
-
-
-
     // }
     /// Four Modes:
     ///     Search Until Solution Bounded
@@ -362,19 +344,6 @@ int MHAPlanner_AD::replan(
         end_time = sbpl::clock::now();
         m_elapsed += end_time - start_time;
     }
-
-    // if (space_->isInTrackingMode()) {
-    //closing stats files
-    if (m_user_guidance) {
-        file_writer_base.close();
-        file_writer_dyn.close();
-    }
-    else {
-        file_writer_base_unguided.close();
-    }        
-        
-
-    // }
 
     if (m_open[0].emptyheap()) {
         ROS_DEBUG_NAMED(SLOG, "Anchor search exhausted");
@@ -764,14 +733,12 @@ void MHAPlanner_AD::check_user_guidance(MHASearchState* state, int hidx)
         if (m_original_hcount != m_hcount)
             minima_dynamic = in_local_minima(state, m_original_hcount);
 
-        store_heuristic(state, hidx, minima_original, minima_dynamic);
         if (m_original_hcount == m_hcount) {
-            if (minima_original /*&& minima_num < 3*/) {
+            if (minima_original) {
                 ROS_INFO_NAMED(SLOG, "Adding dynamic heuristic");
                 m_heurs[m_original_hcount-1]->GetGoalHeuristic(100000);   //reset user heuristic "hack"
                 space_->setStuckState(state->state_id);
                 add_dynamic_heuristic();
-                // minima_num++;
             }
         }
         else {
@@ -780,63 +747,18 @@ void MHAPlanner_AD::check_user_guidance(MHASearchState* state, int hidx)
                 m_hcount = m_original_hcount;
                 int start_dimID = space_->GetDimID(m_start_state->state_id);
                 m_heuristic_list[start_dimID].pop_back();
-
                 m_wait_counter[hidx] = 0;
             }
-            else if (minima_dynamic /*&& minima_num < 3*/){
+            else if (minima_dynamic){
                 ROS_INFO_NAMED(SLOG, "Refreshing dynamic heuristic");
                 m_heurs[m_original_hcount-1]->GetGoalHeuristic(100000);   //reset user heuristic "hack"
                 space_->setStuckState(state->state_id);
                 m_hcount = m_original_hcount;
                 add_dynamic_heuristic();
-                // minima_num++;
-
                 m_wait_counter[hidx] = 0;
             }
 
         }
-    }
-}
-
-void MHAPlanner_AD::store_heuristic(
-    MHASearchState* state, int hidx, bool minima_original, bool minima_dynamic)
-{
-    if (hidx == 1 && file_writer_base.is_open()) {
-        file_writer_base<<state->od[hidx].h<<"\t"<<m_num_expansions;
-
-        if (m_original_hcount == m_hcount) {
-            if (minima_original)
-                file_writer_base<<"\t"<<1;  //Adding dynamic heuristic
-            else
-                file_writer_base<<"\t"<<0;  //no problem
-        }
-        else {
-            if (!minima_original) {
-                file_writer_base<<"\t"<<2;  //Removing dynamic heuristic
-            }
-            else if (minima_dynamic){
-                file_writer_base<<"\t"<<3;  //Refreshing dynamic heuristic
-            }
-
-        }
-        file_writer_base<<std::endl;
-    }
-
-    if (hidx == 3 && file_writer_dyn.is_open()) {
-        file_writer_dyn<<state->od[hidx].h<<"\t"<<m_num_expansions;
-        if (minima_dynamic)
-            file_writer_dyn<<"\t"<<1;          
-        else
-            file_writer_dyn<<"\t"<<0; 
-        file_writer_dyn<<std::endl;
-    }
-}
-
-void MHAPlanner_AD::store_heuristic(MHASearchState* state, int hidx)
-{
-    if (file_writer_base_unguided.is_open() && state->od[hidx].h > 0) {     // terrible hack
-        file_writer_base_unguided<<state->od[hidx].h<<"\t"<<m_num_expansions;
-        file_writer_base_unguided<<std::endl;
     }
 }
 
@@ -844,18 +766,12 @@ void MHAPlanner_AD::expand(MHASearchState* state, int hidx)
 {
     int dimID = space_->GetDimID(state->state_id);
     printf("Expanding state %d (dim = %d) in search %d { g = %d, h(0) = %d, h(%d) = %d, f = %ld \n}", m_num_expansions, dimID, hidx, state->g, state->od[0].h, hidx, state->od[hidx].h, compute_key(state, hidx));
-
     
-    if (space_->isInTrackingMode()) {
-        if (m_user_guidance) {
+    if (m_user_guidance) {
+        if (space_->isInTrackingMode()) {
             check_user_guidance(state, hidx);   // stores heuristic stats within
         }        
-        else {
-            // m_hcount = m_original_hcount;
-            store_heuristic(state, hidx);
-        }
     }
-
 
     space_->expandingState(state->state_id);
 

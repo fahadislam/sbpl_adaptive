@@ -181,7 +181,6 @@ private:
     int m_last_goal_state_id;
 
     bool m_user_guidance;
-    // int minima_num;
 
     bool set_heur_;
 
