@@ -1,6 +1,10 @@
-#include <sbpl_adaptive/adaptive_grid_3d.h>
+#include <sbpl_adaptive/sparse_adaptive_grid_3d.h>
 
 // system includes
+#include <map>
+
+// system includes
+#include <Eigen/Dense>
 #include <leatherman/utils.h>
 #include <ros/console.h>
 #include <ros/time.h>
@@ -14,26 +18,22 @@ static double getDist2(
     return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2);
 }
 
-static double getDist(int x1, int y1, int z1, int x2, int y2, int z2)
-{
-    return sqrt(getDist2(x1, y1, z1, x2, y2, z2));
-}
-
-AdaptiveGrid3D::AdaptiveGrid3D(const sbpl::OccupancyGridPtr& grid) :
+SparseAdaptiveGrid3D::SparseAdaptiveGrid3D(const sbpl::OccupancyGridPtr& grid) :
     trackMode_(false)
 {
     oc_grid_ = grid;
-    grid_sizes_.resize(3);
+
     grid_sizes_[0] = oc_grid_->numCellsX();
     grid_sizes_[1] = oc_grid_->numCellsY();
     grid_sizes_[2] = oc_grid_->numCellsZ();
+    grid_.resize(grid_sizes_[0], grid_sizes_[1], grid_sizes_[2]);
 
     AdaptiveGridCell default_cell;
     default_cell.costToGoal = INFINITECOST;
     default_cell.pDimID = InvalidDim;
     default_cell.pDefaultDimID = InvalidDim;
     default_cell.tDimID = InvalidDim;
-    grid_.assign(grid_sizes_[0], grid_sizes_[1], grid_sizes_[2], default_cell);
+    grid_.reset(default_cell);
 
     invalid_cell_ = default_cell;
 
@@ -41,13 +41,13 @@ AdaptiveGrid3D::AdaptiveGrid3D(const sbpl::OccupancyGridPtr& grid) :
     max_costToGoal_ = 0;
 }
 
-void AdaptiveGrid3D::reset()
+void SparseAdaptiveGrid3D::reset()
 {
     clearAllSpheres();
     setPlanningMode();
 }
 
-void AdaptiveGrid3D::world2grid(
+void SparseAdaptiveGrid3D::world2grid(
     double wx, double wy, double wz,
     int& gx, int& gy, int& gz) const
 {
@@ -58,7 +58,7 @@ void AdaptiveGrid3D::world2grid(
     gz = cz;
 }
 
-void AdaptiveGrid3D::grid2world(
+void SparseAdaptiveGrid3D::grid2world(
     int gx, int gy, int gz,
     double& wx, double& wy, double& wz) const
 {
@@ -69,7 +69,7 @@ void AdaptiveGrid3D::grid2world(
     wz = wz_;
 }
 
-void AdaptiveGrid3D::getBoundaryVisualizationPoints(
+void SparseAdaptiveGrid3D::getBoundaryVisualizationPoints(
     std::vector<geometry_msgs::Point> &points,
     std::vector<std_msgs::ColorRGBA> &colors) const
 {
@@ -142,25 +142,18 @@ void AdaptiveGrid3D::getBoundaryVisualizationPoints(
     }
 }
 
-void AdaptiveGrid3D::resetTrackingGrid()
+void SparseAdaptiveGrid3D::resetTrackingGrid()
 {
-    // reset the tracking grid
-    for (int i = 0; i < grid_sizes_[0]; i++) {
-    for (int j = 0; j < grid_sizes_[1]; j++) {
-    for (int k = 0; k < grid_sizes_[2]; k++) {
+    auto invalidate_tracking = [](AdaptiveGridCell &c) {
         // tracking grid becomes identical to planning grid
 //        grid_(i, j, k).tDimID = grid_(i, j, k).pDimID;
-
-        grid_(i, j, k).tDimID = InvalidDim;
-
-        grid_(i, j, k).costToGoal = INFINITECOST;
-    }
-    }
-    }
-    max_costToGoal_ = 0;
+        c.tDimID = InvalidDim;
+        c.costToGoal = INFINITECOST;
+    };
+    grid_.accept(invalidate_tracking);
 }
 
-void AdaptiveGrid3D::setCellCostToGoal(
+void SparseAdaptiveGrid3D::setCellCostToGoal(
     int gx, int gy, int gz,
     unsigned int costToGoal)
 {
@@ -173,7 +166,7 @@ void AdaptiveGrid3D::setCellCostToGoal(
     }
 }
 
-bool AdaptiveGrid3D::setCellNearDim(
+bool SparseAdaptiveGrid3D::setCellNearDim(
     bool tracking,
     int x,
     int y,
@@ -183,39 +176,43 @@ bool AdaptiveGrid3D::setCellNearDim(
     max_dimID_ = std::max(max_dimID_, dimID);
     bool changed;
     if (tracking) {
-        changed = (grid_(x, y, z).tNearDimID != dimID);
-        grid_(x, y, z).tNearDimID = dimID;
+        changed = (grid_.get(x, y, z).tNearDimID != dimID);
+        if (changed) {
+            grid_(x, y, z).tNearDimID = dimID;
+        }
     }
     else {
-        changed = ((grid_(x, y, z).tNearDimID != dimID) ||
-                (grid_(x, y, z).pNearDimID != dimID));
-        grid_(x, y, z).pNearDimID = dimID;
-        grid_(x, y, z).tNearDimID = dimID;
+        const AdaptiveGridCell &ccell = grid_.get(x, y, z);
+        changed = (ccell.tNearDimID != dimID) || (ccell.pNearDimID != dimID);
+        if (changed) {
+            AdaptiveGridCell &cell = grid_(x, y, z);
+            cell.pNearDimID = dimID;
+            cell.tNearDimID = dimID;
+        }
     }
     return changed;
 }
 
-void AdaptiveGrid3D::clearAllSpheres()
+void SparseAdaptiveGrid3D::clearAllSpheres()
 {
-    //clears all HD regions from the grid
-    for (int i = 0; i < grid_sizes_[0]; ++i) {
-    for (int j = 0; j < grid_sizes_[1]; ++j) {
-    for (int k = 0; k < grid_sizes_[2]; ++k) {
-        grid_(i, j, k).pDimID = grid_(i, j, k).pDefaultDimID;
-        grid_(i, j, k).tDimID = grid_(i, j, k).pDefaultDimID;
-        grid_(i, j, k).costToGoal = INFINITECOST;
-    }
-    }
-    }
+    // clears all HD regions from the grid
+    auto clear_all = [](AdaptiveGridCell &cell) {
+        cell.pDimID = cell.pDefaultDimID;
+        cell.tDimID = cell.pDefaultDimID;
+        cell.costToGoal = INFINITECOST;
+    };
+    grid_.accept(clear_all);
+
     max_costToGoal_ = 0;
 }
 
-void AdaptiveGrid3D::setPlanningMode()
+void SparseAdaptiveGrid3D::setPlanningMode()
 {
     trackMode_ = false;
+    grid_.prune();
 }
 
-void AdaptiveGrid3D::setTrackingMode(
+void SparseAdaptiveGrid3D::setTrackingMode(
     const std::vector<AdaptiveSphere3D> &tunnel,
     std::vector<Position3D> &modCells)
 {
@@ -224,9 +221,10 @@ void AdaptiveGrid3D::setTrackingMode(
     for (const AdaptiveSphere3D &sphere : tunnel) {
         addTrackingSphere(sphere, modCells);
     }
+    grid_.prune();
 }
 
-unsigned int AdaptiveGrid3D::getCellCostToGoal(int gx, int gy, int gz) const
+unsigned int SparseAdaptiveGrid3D::getCellCostToGoal(int gx, int gy, int gz) const
 {
     if (!trackMode_) {
         return 0;
@@ -236,7 +234,7 @@ unsigned int AdaptiveGrid3D::getCellCostToGoal(int gx, int gy, int gz) const
     return getCell(gx, gy, gz).costToGoal;
 }
 
-void AdaptiveGrid3D::getOverlappingSpheres(
+void SparseAdaptiveGrid3D::getOverlappingSpheres(
     int x,
     int y,
     int z,
@@ -254,7 +252,7 @@ void AdaptiveGrid3D::getOverlappingSpheres(
     }
 }
 
-void AdaptiveGrid3D::addSphere(
+void SparseAdaptiveGrid3D::addSphere(
     bool tracking,
     int x,
     int y,
@@ -329,49 +327,78 @@ void AdaptiveGrid3D::addSphere(
     }
 }
 
-visualization_msgs::MarkerArray AdaptiveGrid3D::getVisualizations(
+visualization_msgs::MarkerArray SparseAdaptiveGrid3D::getVisualizations(
     std::string ns_prefix,
     int throttle,
     double scale)
 {
     visualization_msgs::MarkerArray marker;
-    marker.markers.resize(2);
-    marker.markers[0] = getAdaptiveGridVisualization(ns_prefix, throttle, scale);
-    marker.markers[1] = getCostToGoalGridVisualization(ns_prefix, throttle, scale);
+    auto ma = getAdaptiveGridVisualization(ns_prefix, throttle, scale);
+    marker.markers.insert(marker.markers.end(), ma.markers.begin(), ma.markers.end());
+//    marker.markers.push_back(getCostToGoalGridVisualization(ns_prefix, throttle, scale));
+    int id = 0;
+    for (auto &m : marker.markers) {
+        m.id = id++;
+    }
     return marker;
 }
 
-visualization_msgs::Marker AdaptiveGrid3D::getAdaptiveGridVisualization(
+visualization_msgs::MarkerArray SparseAdaptiveGrid3D::getAdaptiveGridVisualization(
     std::string ns_prefix,
     int throttle,
     double scale)
 {
     if (max_dimID_ == -1) {
         // no dimensions assigned anywhere --> no visualizations
-        return visualization_msgs::Marker();
+        return visualization_msgs::MarkerArray();
     }
 
-    visualization_msgs::Marker marker;
-    double m_scale = scale * oc_grid_->resolution();
-    marker.header.stamp = ros::Time::now();
-    marker.header.frame_id = oc_grid_->getReferenceFrame();
-    marker.ns = ns_prefix + "_AdaptiveGrid3D";
-    marker.id = 0;
-    marker.type = visualization_msgs::Marker::CUBE_LIST;
-    marker.action = visualization_msgs::Marker::ADD;
-    marker.pose.position.x = marker.pose.position.y = marker.pose.position.z = 0.0;
-    marker.pose.orientation.w = 1.0;
-    marker.pose.orientation.x = marker.pose.orientation.y = marker.pose.orientation.z = 0.0;
-    marker.scale.x = marker.scale.y = marker.scale.z = m_scale;
-    marker.color.r = marker.color.g = marker.color.b = marker.color.a = 1.0f;
-    marker.lifetime = ros::Duration(0.0);
-    marker.frame_locked = false;
-    for (int x = 0; x < grid_sizes_[0]; x += throttle) {
-    for (int y = 0; y < grid_sizes_[1]; y += throttle) {
-    for (int z = 0; z < grid_sizes_[2]; z += throttle) {
+    grid_.prune();
+
+    int id = 0;
+    std::map<std::tuple<int, int, int>, visualization_msgs::Marker> ma_map;
+    auto gather = [&](
+        const AdaptiveGridCell &cell,
+        size_t xfirst, size_t yfirst, size_t zfirst,
+        size_t xlast, size_t ylast, size_t zlast)
+    {
+        // get world coordinates of extents
+        double wx_from, wy_from, wz_from;
+        double wx_to, wy_to, wz_to;
+
+        oc_grid_->gridToWorld(xfirst, yfirst, zfirst, wx_from, wy_from, wz_from);
+        oc_grid_->gridToWorld(xlast, ylast, zlast, wx_to, wy_to, wz_to);
+        if (!oc_grid_->isInBounds((int)xfirst, (int)yfirst, (int)zfirst) &&
+            !oc_grid_->isInBounds((int)xlast, (int)ylast, (int)zlast))
+        {
+            return;
+        }
+
+        std::tuple<int, int, int> s(xlast - xfirst, ylast - yfirst, zlast - zfirst);
+
+        // create the marker for leaves of this size
+        auto it = ma_map.find(s);
+        if (it == ma_map.end()) {
+            bool inserted;
+            std::tie(it, inserted) = ma_map.insert(
+                    std::make_pair(s, visualization_msgs::Marker()));
+            it->second.header.stamp = ros::Time::now();
+            it->second.header.frame_id = oc_grid_->getReferenceFrame();
+            it->second.ns = ns_prefix + "_AdaptiveGrid3D";
+            it->second.id = id++;
+            it->second.type = visualization_msgs::Marker::CUBE_LIST;
+            it->second.action = visualization_msgs::Marker::ADD;
+            it->second.scale.x = wx_to - wx_from;
+            it->second.scale.y = wy_to - wy_from;
+            it->second.scale.z = wz_to - wz_from;
+            it->second.lifetime = ros::Duration(0.0);
+            it->second.frame_locked = false;
+            it->second.pose.orientation.w = 1.0;
+        }
+
         std_msgs::ColorRGBA col;
         for (int i = 0; i <= max_dimID_; ++i) {
-            if (dimEnabled(x, y, z, i, trackMode_)) {
+            if (dimEnabled(xfirst, yfirst, zfirst, i, trackMode_)) {
                 double hue = 360.0 * i / (double)(max_dimID_ + 1);
                 std_msgs::ColorRGBA c;
                 leatherman::msgHSVToRGB(hue, 1.0, 1.0, c);
@@ -384,33 +411,108 @@ visualization_msgs::Marker AdaptiveGrid3D::getAdaptiveGridVisualization(
         }
 
         // normalize color
-        float m = col.r;
-        m = std::max(m, col.g);
-        m = std::max(m, col.b);
-        if (m == 0.0f) {
-            continue;
+        float mc = col.r;
+        mc = std::max(mc, col.g);
+        mc = std::max(mc, col.b);
+        if (mc == 0.0f) { // skip black (no dim) cells
+            col.r = 0.4;
+            col.g = 0.4;
+            col.b = 0.4;
+            col.a = 0.2;
+            return; // uncomment me if you'd like some freespace prints
+        } else {
+            float minv = 1.0 / mc;
+            col.r *= minv;
+            col.g *= minv;
+            col.b *= minv;
+            col.a = 1.0f;
         }
-        float minv = 1.0 / m;
-        col.r *= minv;
-        col.g *= minv;
-        col.b *= minv;
-        col.a = 1.0f;
 
-        double wx, wy, wz;
-        grid2world(x, y, z, wx, wy, wz);
         geometry_msgs::Point p;
-        p.x = wx;
-        p.y = wy;
-        p.z = wz;
-        marker.points.push_back(p);
-        marker.colors.push_back(col);
+        p.x = 0.5 * (wx_from + wx_to) - 0.5 * oc_grid_->resolution();
+        p.y = 0.5 * (wy_from + wy_to) - 0.5 * oc_grid_->resolution();
+        p.z = 0.5 * (wz_from + wz_to) - 0.5 * oc_grid_->resolution();
+        it->second.points.push_back(p);
+        it->second.colors.push_back(col);
+    };
+
+    grid_.accept_coords(gather);
+
+    // gather all markers into MarkerArray
+    visualization_msgs::MarkerArray ma;
+    for (auto &entry : ma_map) {
+        if (!entry.second.points.empty()) {
+            ma.markers.push_back(std::move(entry.second));
+        }
     }
+    id = 0;
+    for (auto &m : ma.markers) {
+        m.id = id++;
     }
-    }
-    return marker;
+
+    ROS_INFO_STREAM("Created Visualization from " << grid_.num_nodes() << " nodes");
+    return ma;
+
+//    visualization_msgs::Marker marker;
+//    double m_scale = scale * oc_grid_->resolution();
+//    marker.header.stamp = ros::Time::now();
+//    marker.header.frame_id = oc_grid_->getReferenceFrame();
+//    marker.ns = ns_prefix + "_AdaptiveGrid3D";
+//    marker.id = 0;
+//    marker.type = visualization_msgs::Marker::CUBE_LIST;
+//    marker.action = visualization_msgs::Marker::ADD;
+//    marker.pose.position.x = marker.pose.position.y = marker.pose.position.z = 0.0;
+//    marker.pose.orientation.w = 1.0;
+//    marker.pose.orientation.x = marker.pose.orientation.y = marker.pose.orientation.z = 0.0;
+//    marker.scale.x = marker.scale.y = marker.scale.z = m_scale;
+//    marker.color.r = marker.color.g = marker.color.b = marker.color.a = 1.0f;
+//    marker.lifetime = ros::Duration(0.0);
+//    marker.frame_locked = false;
+//    for (int x = 0; x < grid_sizes_[0]; x += throttle) {
+//    for (int y = 0; y < grid_sizes_[1]; y += throttle) {
+//    for (int z = 0; z < grid_sizes_[2]; z += throttle) {
+//        std_msgs::ColorRGBA col;
+//        for (int i = 0; i <= max_dimID_; ++i) {
+//            if (dimEnabled(x, y, z, i, trackMode_)) {
+//                double hue = 360.0 * i / (double)(max_dimID_ + 1);
+//                std_msgs::ColorRGBA c;
+//                leatherman::msgHSVToRGB(hue, 1.0, 1.0, c);
+//                // additive color per dimension
+//                col.r += c.r;
+//                col.g += c.g;
+//                col.b += c.b;
+//
+//            }
+//        }
+//
+//        // normalize color
+//        float m = col.r;
+//        m = std::max(m, col.g);
+//        m = std::max(m, col.b);
+//        if (m == 0.0f) {
+//            continue;
+//        }
+//        float minv = 1.0 / m;
+//        col.r *= minv;
+//        col.g *= minv;
+//        col.b *= minv;
+//        col.a = 1.0f;
+//
+//        double wx, wy, wz;
+//        grid2world(x, y, z, wx, wy, wz);
+//        geometry_msgs::Point p;
+//        p.x = wx;
+//        p.y = wy;
+//        p.z = wz;
+//        marker.points.push_back(p);
+//        marker.colors.push_back(col);
+//    }
+//    }
+//    }
+//    return marker;
 }
 
-visualization_msgs::Marker AdaptiveGrid3D::getCostToGoalGridVisualization(
+visualization_msgs::Marker SparseAdaptiveGrid3D::getCostToGoalGridVisualization(
     std::string ns_prefix,
     int throttle,
     double scale)

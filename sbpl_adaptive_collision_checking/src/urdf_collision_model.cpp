@@ -34,8 +34,8 @@
 // system includes
 #include <leatherman/utils.h>
 #include <leatherman/print.h>
-#include <sbpl_geometry_utils/bounding_spheres.h>
-#include <sbpl_geometry_utils/voxelize.h>
+#include <smpl/geometry/bounding_spheres.h>
+#include <smpl/geometry/voxelize.h>
 
 namespace adim {
 
@@ -48,7 +48,6 @@ URDFCollisionModel::URDFCollisionModel() :
     collision_spheres_(),
     contact_spheres_(),
     attached_objects_(),
-    rm_loader_(),
     robot_model_(),
     robot_state_()
 {
@@ -79,20 +78,25 @@ URDFModelCoords URDFCollisionModel::getDefaultCoordinates() const
 
 URDFModelCoords URDFCollisionModel::getRandomCoordinates() const
 {
+    return getRandomCoordinates(robot_state_->getRandomNumberGenerator());
+}
+
+URDFModelCoords URDFCollisionModel::getRandomCoordinates(
+    random_numbers::RandomNumberGenerator &rng) const
+{
     URDFModelCoords c;
 
     c.root = Eigen::Affine3d::Identity();
     c.collision_links = links_with_collision_spheres_;
     c.contact_links = links_with_contact_spheres_;
 
-    for (moveit::core::JointModel* j : robot_model_->getJointModels()) {
+    for (moveit::core::JointModel *j : robot_model_->getJointModels()) {
         if (j->getVariableCount() > 0) {
             std::vector<double> vals(j->getVariableCount());
             do {
-                j->getVariableRandomPositions(
-                        robot_state_->getRandomNumberGenerator(), &vals[0]);
+                j->getVariableRandomPositions(rng, &vals[0]);
             }
-            while (!j->enforcePositionBounds(&vals[0]));
+            while (j->enforcePositionBounds(&vals[0]));
             c.coordmap[j->getName()] = vals;
         }
     }
@@ -104,12 +108,13 @@ bool URDFCollisionModel::initFromURDF(
     const std::string& urdf_string,
     const std::string& srdf_string)
 {
-    urdf::Model* urdf_model = new urdf::Model;
+    auto urdf_model = boost::make_shared<urdf::Model>();
     if (!urdf_model->initString(urdf_string)) {
         ROS_WARN("Failed to parse the URDF");
         return false;
     }
-    urdf_.reset(urdf_model);
+    urdf_ = std::move(urdf_model);
+
     if (!initRobotModelFromURDF(urdf_string, srdf_string)) {
         ROS_WARN("Failed to load robot model from URDF/SRDF");
         return false;
@@ -120,25 +125,43 @@ bool URDFCollisionModel::initFromURDF(
     return true;
 }
 
-void URDFCollisionModel::printIgnoreSelfCollisionLinkPairs()
+/// Print the set of ignored self-collision pairs to an output stream.
+void URDFCollisionModel::printIgnoreSelfCollisionLinkPairs(std::ostream& o)
 {
-    printf("{\n");
-    for (auto pair : self_collision_ignore_pairs_) {
-        printf("std::make_pair(\"%s\",\"%s\"),", pair.first.c_str(),
-                pair.second.c_str());
+    o << "{ ";
+    for (size_t i = 0; i < self_collision_ignore_pairs_.size(); ++i) {
+        const auto &pair = self_collision_ignore_pairs_[i];
+        o << "(" << pair.first << ", " << pair.second << ")";
+        if (i != self_collision_ignore_pairs_.size() - 1) {
+            o << ',';
+        }
+        o << ' ';
     }
-    printf("}\n");
+    o << '}';
 }
 
+/// Compute a set of collision and contact spheres that bound the surface of the
+/// robot's geometry. Overwrites the existing set of collision and contact
+/// spheres. Bounding spheres are computed by 3d rasterization of the surface
+/// geometry into a voxel grid with cells of size \p res and placing spheres at
+/// the center of each occupied cell with radius \p res.
+///
+/// \param res The radius of computed collision/contact spheres.
+/// \param A set of links to be ignored. Their existing collision spheres will
+///     be retained and no additional collision spheres will be generated.
+/// \param The set of contact links. Their existing contact spheres will be
+///     overwritten.
+/// \return true
 bool URDFCollisionModel::computeSpheresFromURDFModel(
     double res,
     const std::vector<std::string> &ignore_collision_links,
     const std::vector<std::string> &contact_links)
 {
-    const std::vector<robot_model::LinkModel*> links = robot_model_->getLinkModels();
+    const std::vector<robot_model::LinkModel*> &links =
+            robot_model_->getLinkModels();
 
     for (const robot_model::LinkModel* link : links) {
-        std::string link_name = link->getName();
+        const std::string &link_name = link->getName();
         bool bIgnoreCollision = std::find(
                 ignore_collision_links.begin(),
                 ignore_collision_links.end(),
@@ -154,16 +177,16 @@ bool URDFCollisionModel::computeSpheresFromURDFModel(
 
         std::vector<Sphere> link_spheres;
 
-        // multiple shapes after than groovy
-        std::vector<shapes::ShapeConstPtr> objects = link->getShapes();
-        for (shapes::ShapeConstPtr object : objects) {
+        for (const shapes::ShapeConstPtr &object : link->getShapes()) {
             if (!object) {
                 continue;
             }
+
             Eigen::Affine3d pose = Eigen::Affine3d::Identity(); //link->getJointOriginTransform();
 
-            size_t prev_size = link_spheres.size();
+            const size_t prev_size = link_spheres.size();
 
+            // append spheres
             computeShapeBoundingSpheres(*object, res, link_spheres);
 
             // transform the spheres by the pose
@@ -172,23 +195,39 @@ bool URDFCollisionModel::computeSpheresFromURDFModel(
             }
 
             // give unique names to the spheres and reference the attached link
-            for (size_t i = 0; i < link_spheres.size(); ++i) {
+            for (size_t i = prev_size; i < link_spheres.size(); ++i) {
                 Sphere& s = link_spheres[i];
                 s.name_ = link->getName() + "_" + std::to_string(i);
                 s.link_name_ = link->getName();
             }
+        }
 
-            if (!bIgnoreCollision) {
-                collision_spheres_[link->getName()] = link_spheres;
+        if (!bIgnoreCollision) {
+            collision_spheres_[link->getName()] = link_spheres;
+
+            if (std::find(
+                    links_with_collision_spheres_.begin(),
+                    links_with_collision_spheres_.end(),
+                    link->getName()) == links_with_collision_spheres_.end())
+            {
                 links_with_collision_spheres_.push_back(link->getName());
-                ROS_INFO("Adding %d collision spheres for link %s", (int )link_spheres.size(), link->getName().c_str());
             }
 
-            if (bIsContact) {
-                contact_spheres_[link->getName()] = link_spheres;
+            ROS_INFO("Adding %zu collision spheres for link %s", link_spheres.size(), link->getName().c_str());
+        }
+
+        if (bIsContact) {
+            contact_spheres_[link->getName()] = link_spheres;
+
+            if (std::find(
+                    links_with_contact_spheres_.begin(),
+                    links_with_contact_spheres_.end(),
+                    link->getName()) == links_with_contact_spheres_.end())
+            {
                 links_with_contact_spheres_.push_back(link->getName());
-                ROS_INFO("Adding %d contact spheres for link %s", (int )link_spheres.size(), link->getName().c_str());
             }
+
+            ROS_INFO("Adding %zu contact spheres for link %s", link_spheres.size(), link->getName().c_str());
         }
     }
     return true;
@@ -204,34 +243,9 @@ bool URDFCollisionModel::initFromParam(const std::string &robot_desc_param_name)
     ops.srdf_doc_ = nullptr;
     ops.load_kinematics_solvers_ = true;
 
-    rm_loader_.reset(new robot_model_loader::RobotModelLoader(ops));
-    if (!rm_loader_) {
-        ROS_ERROR("Failed to instantiate Robot Model Loader from description");
-        ROS_ERROR("%s", robot_desc_param_name.c_str());
-        return false;
-    }
+    robot_model_loader::RobotModelLoader loader(ops);
 
-    robot_model_ = rm_loader_->getModel();
-    if (!robot_model_) {
-        ROS_ERROR("Failed to retrieve valid Robot Model");
-        ROS_ERROR("%s", robot_desc_param_name.c_str());
-        return false;
-    }
-
-    urdf_ = robot_model_->getURDF();
-    srdf_ = robot_model_->getSRDF();
-
-    robot_state_.reset(new robot_state::RobotState(robot_model_));
-    if (!robot_state_) {
-        ROS_ERROR("Failed to instantiate Robot State");
-        return false;
-    }
-
-    const robot_model::JointModel* root = robot_model_->getJointModel(robot_model_->getRootJointName());
-
-    robot_state_->setToDefaultValues();
-
-    return true;
+    return initFromModel(loader.getModel());
 }
 
 bool URDFCollisionModel::initRobotModelFromURDF(
@@ -246,27 +260,26 @@ bool URDFCollisionModel::initRobotModelFromURDF(
     ops.srdf_doc_ = nullptr;
     ops.load_kinematics_solvers_ = true;
 
-    rm_loader_.reset(new robot_model_loader::RobotModelLoader(ops));
-    if (!rm_loader_) {
-        ROS_ERROR("Failed to instantiate Robot Model Loader");
+    robot_model_loader::RobotModelLoader loader(ops);
+
+    return initFromModel(loader.getModel());
+}
+
+bool URDFCollisionModel::initFromModel(
+    const moveit::core::RobotModelPtr &robot_model)
+{
+    if (!robot_model) {
         return false;
     }
 
-    robot_model_ = rm_loader_->getModel();
-    if (!robot_model_) {
-        ROS_ERROR("Failed to retrieve valid Robot Model");
-        return false;
-    }
+    robot_model_ = robot_model;
+    urdf_ = robot_model->getURDF();
+    srdf_ = robot_model->getSRDF();
 
-    srdf_ = robot_model_->getSRDF();
+    robot_state_ = boost::make_shared<moveit::core::RobotState>(robot_model);
+    robot_state_->setToDefaultValues();
 
-    robot_state_.reset(new robot_state::RobotState(robot_model_));
-    if (!robot_state_) {
-        ROS_ERROR("Failed to instantiate Robot State");
-        return false;
-    }
-
-    const robot_model::JointModel* root = robot_model_->getRootJoint();
+    const robot_model::JointModel* root = robot_model->getRootJoint();
 
     return true;
 }
@@ -293,7 +306,7 @@ bool URDFCollisionModel::getLinkCollisionSpheres_CurrentState(
     }
 
     if (hasAttachedObjects(link_name)) {
-        ROS_INFO("Found attahed objects for link %s", link_name.c_str());
+        ROS_INFO("Found attached objects for link %s", link_name.c_str());
         if (!getLinkAttachedObjectsSpheres(link_name, tfm, spheres)) {
             return false;
         }
@@ -348,12 +361,16 @@ bool URDFCollisionModel::getLinkContactSpheres_CurrentState(
     return true;
 }
 
+/// Add all pairs of colliding links in the default state to the allowed
+/// collision matrix.
 void URDFCollisionModel::autoIgnoreSelfCollisions()
 {
     URDFModelCoords defaultCoords = getDefaultCoordinates();
     autoIgnoreSelfCollisions(defaultCoords);
 }
 
+/// Add all pairs of colliding links in the given state to the allowed
+/// collision matrix.
 void URDFCollisionModel::autoIgnoreSelfCollisions(
     const URDFModelCoords &coords)
 {
@@ -478,8 +495,9 @@ bool URDFCollisionModel::checkLimits(const URDFModelCoords &coords) const
         throw SBPL_Exception();
     }
     for (auto it = coords.coordmap.begin(); it != coords.coordmap.end(); it++) {
-        std::string joint_name = it->first;
-        const robot_model::JointModel* jm = robot_model_->getJointModel(joint_name);
+        const std::string &joint_name = it->first;
+        const robot_model::JointModel* jm =
+                robot_model_->getJointModel(joint_name);
 
         if (!jm) {
             ROS_ERROR("Could not get joint model for joint %s", joint_name.c_str());
@@ -490,7 +508,7 @@ bool URDFCollisionModel::checkLimits(const URDFModelCoords &coords) const
         robot_model::JointModel::Bounds bounds = jm->getVariableBounds();
 
         if (var_count != it->second.size()) {
-            ROS_ERROR("URDFCollisionModel::getModelCollisionSpheres -- coords.size() (%zu) != joint #vars (%d) for joint %s!", it->second.size(), var_count, joint_name.c_str());
+            ROS_ERROR("coords.size() (%zu) != joint #vars (%d) for joint %s!", it->second.size(), var_count, joint_name.c_str());
             throw SBPL_Exception();
             return false;
         }
@@ -1052,6 +1070,25 @@ bool URDFCollisionModel::computeCOM(
     return true;
 }
 
+/// Compute an IK solution for the default tip of a joint group, using the
+/// underlying kinematics solver attached to the RobotModel. The seed state is
+/// adjusted to fit within joint limits. If the underlying solver returns
+/// solutions invalid with respect to joint limits, the solution will be
+/// adjusted only if approximate solutions are allowed, otherwise, this function
+/// will return false.
+///
+/// \param group_name The group to compute IK for
+/// \param ee_pose_map The pose of the tip link in the model frame
+/// \param seed The seed state
+/// \param sol The solution state; this will contain the adjusted seed state
+///     values and the solution values from the joints variables from the joint
+///     group
+/// \param bAllowApproxSolutions Whether to allow the underlying solver to
+///     return approximate solutions
+/// \param n_attempts The number of attempts to be used by the underlying solver
+/// \param time_s The allowed time given to the underlying solver
+///
+/// \return true if a valid solution was computed
 bool URDFCollisionModel::computeGroupIK(
     const std::string &group_name,
     const Eigen::Affine3d &ee_pose_map,
@@ -1061,6 +1098,15 @@ bool URDFCollisionModel::computeGroupIK(
     int n_attempts,
     double time_s)
 {
+    // reference seed for later
+    moveit::core::RobotState seed_state(robot_model_);
+    if (!updateFK(seed_state, seed)) {
+        ROS_ERROR("Failed to update kinematics");
+        return false;
+    }
+
+    *robot_state_ = seed_state; // the solution state to-be
+
     const robot_model::JointModelGroup* jmg =
             robot_model_->getJointModelGroup(group_name);
 
@@ -1069,14 +1115,12 @@ bool URDFCollisionModel::computeGroupIK(
         return false;
     }
 
-    if (!updateFK(seed)) {
-        ROS_ERROR("Failed to update kinematics");
-        return false;
-    }
+    // keep the solvers happy
+    robot_state_->enforceBounds(jmg);
 
+    // call ik
     kinematics::KinematicsQueryOptions options;
     options.return_approximate_solution = bAllowApproxSolutions;
-
     if (!robot_state_->setFromIK(
             jmg,
             ee_pose_map,
@@ -1089,6 +1133,46 @@ bool URDFCollisionModel::computeGroupIK(
         robot_state_->copyJointGroupPositions(jmg, gpos);
         ROS_DEBUG("Failed to compute IK for group '%s' to pose { %s } using seed %s", group_name.c_str(), to_str(ee_pose_map).c_str(), to_string(gpos).c_str());
         return false;
+    }
+
+    //  foreach active joint in the joint group
+    for (const moveit::core::JointModel *jm : jmg->getActiveJointModels()) {
+        // for revolute joints
+        if (jm->getType() == moveit::core::JointModel::REVOLUTE) {
+            if (!jm->getVariableBounds()[0].position_bounded_) {
+                // just normalize these...to keep RobotState from being upset
+                robot_state_->enforcePositionBounds(jm);
+            }
+//            else {
+//                // find the closest 2*pi equivalent that is within bounds
+//                double spos = robot_state_->getJointPositions(jm)[0];
+//
+//                double vdiff = seed_state.getJointPositions(jm)[0] - spos;
+//
+//                int twopi_hops = (int)std::fabs(vdiff / (2.0 * M_PI));
+//
+//                double npos = spos + 2.0 * M_PI * twopi_hops * std::copysign(1.0, vdiff);
+//                if (fabs(npos - seed_state.getJointPositions(jm)[0]) > M_PI) {
+//                    // one hop this time
+//                    npos += 2.0 * M_PI * std::copysign(1.0, vdiff);
+//                }
+//
+//                // try it out, revert if outside bounds
+//                robot_state_->setJointPositions(jm, &npos);
+//                if (!robot_state_->satisfiesBounds(jm)) {
+//                    robot_state_->setJointPositions(jm, &spos);
+//                }
+//            }
+        }
+    }
+
+    if (bAllowApproxSolutions) {
+        robot_state_->enforceBounds(jmg);
+    } else {
+        if (!robot_state_->satisfiesBounds(jmg)) {
+            ROS_DEBUG("IK Solution angles are out of bounds");
+            return false;
+        }
     }
 
     for (const moveit::core::JointModel *jm : jmg->getJointModels()) {
@@ -1216,7 +1300,7 @@ bool URDFCollisionModel::computeShapeBoundingSpheres(
     case shapes::BOX: {
         const shapes::Box& obj = dynamic_cast<const shapes::Box&>(shape);
         std::vector<Eigen::Vector3d> centers;
-        sbpl::ComputeBoxBoundingSpheres(obj.size[0], obj.size[1], obj.size[2], res, centers);
+        sbpl::geometry::ComputeBoxBoundingSpheres(obj.size[0], obj.size[1], obj.size[2], res, centers);
         spheres.reserve(spheres.size() + centers.size());
         for (const auto& center : centers) {
             spheres.push_back(Sphere());
@@ -1227,7 +1311,7 @@ bool URDFCollisionModel::computeShapeBoundingSpheres(
     case shapes::CYLINDER: {
         const shapes::Cylinder& obj = dynamic_cast<const shapes::Cylinder&>(shape);
         std::vector<Eigen::Vector3d> centers;
-        sbpl::ComputeCylinderBoundingSpheres(obj.radius, obj.length, res, centers);
+        sbpl::geometry::ComputeCylinderBoundingSpheres(obj.radius, obj.length, res, centers);
         spheres.reserve(spheres.size() + centers.size());
         for (const auto& center : centers) {
             spheres.push_back(Sphere());
@@ -1265,7 +1349,7 @@ bool URDFCollisionModel::computeShapeBoundingSpheres(
         /// sbpl_geometry_utils
         double radius = sqrt(2.0) * res;
         std::vector<Eigen::Vector3d> centers;
-        sbpl::VoxelizeMesh(vert, tri, radius, centers, false);
+        sbpl::geometry::VoxelizeMesh(vert, tri, radius, centers, false);
         spheres.reserve(spheres.size() + centers.size());
         for (const auto& center : centers) {
             spheres.push_back(Sphere());

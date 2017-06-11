@@ -1,5 +1,5 @@
-#ifndef SBPL_ADAPTIVE_ADAPTIVE_GRID_3D_H
-#define SBPL_ADAPTIVE_ADAPTIVE_GRID_3D_H
+#ifndef SBPL_ADAPTIVE_SPARSE_ADAPTIVE_GRID_3D_H
+#define SBPL_ADAPTIVE_SPARSE_ADAPTIVE_GRID_3D_H
 
 // standard includes
 #include <stdlib.h>
@@ -14,7 +14,7 @@
 #include <sbpl/utils/key.h>
 #include <smpl/occupancy_grid.h>
 #include <smpl/forward.h>
-#include <smpl/grid.h>
+#include <smpl/grid/sparse_grid.h>
 #include <std_msgs/ColorRGBA.h>
 #include <visualization_msgs/Marker.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -25,9 +25,7 @@
 
 namespace adim {
 
-#define ADAPTIVE_GRID_EXCLUSIVE 0
-
-SBPL_CLASS_FORWARD(AdaptiveGrid3D)
+SBPL_CLASS_FORWARD(SparseAdaptiveGrid3D)
 
 /// A representation of the current state of an adaptive graph with respect to
 /// enabled regions mapped to three-dimensional grid cells. Each grid cell
@@ -53,13 +51,13 @@ SBPL_CLASS_FORWARD(AdaptiveGrid3D)
 ///
 /// A state not enabled by default and not enabled during a previous planning
 /// iteration, may be enabled during a tracking iteration.
-class AdaptiveGrid3D
+class SparseAdaptiveGrid3D
 {
 public:
 
     static const int InvalidDim = 0;
 
-    AdaptiveGrid3D(const sbpl::OccupancyGridPtr& grid);
+    SparseAdaptiveGrid3D(const sbpl::OccupancyGridPtr& grid);
 
     const sbpl::OccupancyGridPtr &grid() { return oc_grid_; }
 
@@ -142,7 +140,7 @@ public:
         int throttle = 1,
         double scale = 1.0);
 
-    visualization_msgs::Marker getAdaptiveGridVisualization(
+    visualization_msgs::MarkerArray getAdaptiveGridVisualization(
         std::string ns_prefix,
         int throttle = 1,
         double scale = 1.0);
@@ -157,11 +155,11 @@ private:
 
     bool trackMode_;
 
-    std::vector<int> grid_sizes_;
+    std::array<int, 3> grid_sizes_;
     std::vector<std::vector<int>> spheres_;
 
     // used to keep track of state type (LD, NearLD, HD)
-    sbpl::Grid3<AdaptiveGridCell> grid_;
+    sbpl::SparseGrid<AdaptiveGridCell> grid_;
     AdaptiveGridCell invalid_cell_;
 
     int max_dimID_;
@@ -209,156 +207,149 @@ private:
 
 /// Also enables the planning bit for the representation.
 inline
-bool AdaptiveGrid3D::enableDimDefault(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::enableDimDefault(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-#if ADAPTIVE_GRID_EXCLUSIVE
-    grid_(gx, gy, gz).pDefaultDimID = InvalidDim;
-#endif
-
-    int prev_dims = grid_(gx, gy, gz).pDefaultDimID;
-    grid_(gx, gy, gz).pDefaultDimID |= (1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.pDefaultDimID;
+    cell.pDefaultDimID |= (1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-
-    return (grid_(gx, gy, gz).pDefaultDimID != prev_dims) |
-            enableDimPlanning(gx, gy, gz, dimID);
+    return cell.pDefaultDimID != prev_dims | enableDimPlanning(gx, gy, gz, dimID);
 }
 
 /// Also disables the planning bit for the representation.
 inline
-bool AdaptiveGrid3D::disableDimDefault(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::disableDimDefault(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).pDefaultDimID;
-    grid_(gx, gy, gz).pDefaultDimID &= ~(1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.pDefaultDimID;
+    cell.pDefaultDimID &= ~(1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return (grid_(gx, gy, gz).pDefaultDimID != prev_dims) |
-            disableDimDefault(gx, gy, gz, dimID);
+    return cell.pDefaultDimID != prev_dims | disableDimDefault(gx, gy, gz, dimID);
 }
 
 /// Also enables the tracking bit for the representation.
 inline
-bool AdaptiveGrid3D::enableDimPlanning(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::enableDimPlanning(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-#if ADAPTIVE_GRID_EXCLUSIVE
-    grid_(gx, gy, gz).pDimID = InvalidDim;
-#endif
-
-    int prev_dims = grid_(gx, gy, gz).pDimID;
-    grid_(gx, gy, gz).pDimID |= (1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.pDimID;
+    cell.pDimID |= (1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).pDimID != prev_dims |
-            enableDimTracking(gx, gy, gz, dimID);
+    return cell.pDimID != prev_dims | enableDimTracking(gx, gy, gz, dimID);
 }
 
 /// Also disables the tracking bit for the representation.
 inline
-bool AdaptiveGrid3D::disableDimPlanning(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::disableDimPlanning(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).pDimID;
-    grid_(gx, gy, gz).pDimID &= ~(1 << dimID);
-    return grid_(gx, gy, gz).pDimID != prev_dims |
-            disableDimTracking(gx, gy, gz, dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.pDimID;
+    cell.pDimID &= ~(1 << dimID);
+    return cell.pDimID != prev_dims | disableDimTracking(gx, gy, gz, dimID);
 }
 
 inline
-bool AdaptiveGrid3D::enableDimTracking(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::enableDimTracking(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-#if ADAPTIVE_GRID_EXCLUSIVE
-    grid_(gx, gy, gz).tDimID = InvalidDim;
-#endif
-
-    int prev_dims = grid_(gx, gy, gz).tDimID;
-    grid_(gx, gy, gz).tDimID |= (1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.tDimID;
+    cell.tDimID |= (1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).tDimID != prev_dims;
+    return cell.tDimID != prev_dims;
 }
 
 inline
-bool AdaptiveGrid3D::disableDimTracking(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::disableDimTracking(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).tDimID;
-    grid_(gx, gy, gz).tDimID &= ~(1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.tDimID;
+    cell.tDimID &= ~(1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).tDimID != prev_dims;
+    return cell.tDimID != prev_dims;
 }
 
 inline
-bool AdaptiveGrid3D::enableNearDimPlanning(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::enableNearDimPlanning(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).pNearDimID;
-    grid_(gx, gy, gz).pNearDimID |= (1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.pNearDimID;
+    cell.pNearDimID |= (1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).pNearDimID != prev_dims;
+    return cell.pNearDimID != prev_dims;
 }
 
 inline
-bool AdaptiveGrid3D::disableNearDimPlanning(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::disableNearDimPlanning(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).pNearDimID;
-    grid_(gx, gy, gz).pNearDimID &= ~(1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.pNearDimID;
+    cell.pNearDimID &= ~(1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).pNearDimID != prev_dims;
+    return cell.pNearDimID != prev_dims;
 }
 
 inline
-bool AdaptiveGrid3D::enableNearDimTracking(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::enableNearDimTracking(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).tNearDimID;
-    grid_(gx, gy, gz).tNearDimID |= (1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.tNearDimID;
+    cell.tNearDimID |= (1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).tNearDimID != prev_dims;
+    return cell.tNearDimID != prev_dims;
 }
 
 inline
-bool AdaptiveGrid3D::disableNearDimTracking(int gx, int gy, int gz, int dimID)
+bool SparseAdaptiveGrid3D::disableNearDimTracking(int gx, int gy, int gz, int dimID)
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
 
-    int prev_dims = grid_(gx, gy, gz).tNearDimID;
-    grid_(gx, gy, gz).tNearDimID &= ~(1 << dimID);
+    AdaptiveGridCell &cell = grid_(gx, gy, gz);
+    int prev_dims = cell.tNearDimID;
+    cell.tNearDimID &= ~(1 << dimID);
     max_dimID_ = std::max(max_dimID_, dimID);
-    return grid_(gx, gy, gz).tNearDimID != prev_dims;
+    return cell.tNearDimID != prev_dims;
 }
 
 inline
-bool AdaptiveGrid3D::enableNearDim(
+bool SparseAdaptiveGrid3D::enableNearDim(
     int gx,
     int gy,
     int gz,
@@ -374,7 +365,7 @@ bool AdaptiveGrid3D::enableNearDim(
 }
 
 inline
-bool AdaptiveGrid3D::disableNearDim(
+bool SparseAdaptiveGrid3D::disableNearDim(
     int gx,
     int gy,
     int gz,
@@ -390,7 +381,7 @@ bool AdaptiveGrid3D::disableNearDim(
 }
 
 inline
-bool AdaptiveGrid3D::enableDim(int gx, int gy, int gz, int dimID, bool tracking)
+bool SparseAdaptiveGrid3D::enableDim(int gx, int gy, int gz, int dimID, bool tracking)
 {
     if (tracking) {
         return enableDimTracking(gx, gy, gz, dimID);
@@ -401,7 +392,7 @@ bool AdaptiveGrid3D::enableDim(int gx, int gy, int gz, int dimID, bool tracking)
 }
 
 inline
-bool AdaptiveGrid3D::disableDim(
+bool SparseAdaptiveGrid3D::disableDim(
     int gx,
     int gy,
     int gz,
@@ -417,25 +408,25 @@ bool AdaptiveGrid3D::disableDim(
 }
 
 inline
-bool AdaptiveGrid3D::dimEnabledPlanning(int gx, int gy, int gz, int dimID) const
+bool SparseAdaptiveGrid3D::dimEnabledPlanning(int gx, int gy, int gz, int dimID) const
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
-    return grid_(gx, gy, gz).pDimID & (1 << dimID);
+    return grid_.get(gx, gy, gz).pDimID & (1 << dimID);
 }
 
 inline
-bool AdaptiveGrid3D::dimEnabledTracking(int gx, int gy, int gz, int dimID) const
+bool SparseAdaptiveGrid3D::dimEnabledTracking(int gx, int gy, int gz, int dimID) const
 {
     if (!isInBounds(gx, gy, gz)) {
         return false;
     }
-    return grid_(gx, gy, gz).tDimID & (1 << dimID);
+    return grid_.get(gx, gy, gz).tDimID & (1 << dimID);
 }
 
 inline
-bool AdaptiveGrid3D::dimEnabled(
+bool SparseAdaptiveGrid3D::dimEnabled(
     int gx,
     int gy,
     int gz,
@@ -451,7 +442,7 @@ bool AdaptiveGrid3D::dimEnabled(
 }
 
 inline
-void AdaptiveGrid3D::addPlanningSphere(
+void SparseAdaptiveGrid3D::addPlanningSphere(
     const AdaptiveSphere3D &sphere,
     std::vector<Position3D> &modCells)
 {
@@ -463,7 +454,7 @@ void AdaptiveGrid3D::addPlanningSphere(
 }
 
 inline
-void AdaptiveGrid3D::getDimensions(int &sizeX, int &sizeY, int &sizeZ) const
+void SparseAdaptiveGrid3D::getDimensions(int &sizeX, int &sizeY, int &sizeZ) const
 {
     sizeX = grid_sizes_[0];
     sizeY = grid_sizes_[1];
@@ -471,18 +462,18 @@ void AdaptiveGrid3D::getDimensions(int &sizeX, int &sizeY, int &sizeZ) const
 }
 
 inline
-const AdaptiveGridCell &AdaptiveGrid3D::getCell(int gx, int gy, int gz) const
+const AdaptiveGridCell &SparseAdaptiveGrid3D::getCell(int gx, int gy, int gz) const
 {
     if (!isInBounds(gx, gy, gz)) {
         return invalid_cell_;
     }
     else {
-        return grid_(gx, gy, gz);
+        return grid_.get(gx, gy, gz);
     }
 }
 
 inline
-const AdaptiveGridCell &AdaptiveGrid3D::getCell(double wx, double wy, double wz) const
+const AdaptiveGridCell &SparseAdaptiveGrid3D::getCell(double wx, double wy, double wz) const
 {
     int gcoordx, gcoordy, gcoordz;
     world2grid(wx, wy, wz, gcoordx, gcoordy, gcoordz);
@@ -490,7 +481,7 @@ const AdaptiveGridCell &AdaptiveGrid3D::getCell(double wx, double wy, double wz)
 }
 
 inline
-unsigned int AdaptiveGrid3D::getCellCostToGoal(double wx, double wy, double wz) const
+unsigned int SparseAdaptiveGrid3D::getCellCostToGoal(double wx, double wy, double wz) const
 {
     int gcoordx, gcoordy, gcoordz;
     world2grid(wx, wy, wz, gcoordx, gcoordy, gcoordz);
@@ -498,13 +489,13 @@ unsigned int AdaptiveGrid3D::getCellCostToGoal(double wx, double wy, double wz) 
 }
 
 inline
-bool AdaptiveGrid3D::isInBounds(int gx, int gy, int gz) const
+bool SparseAdaptiveGrid3D::isInBounds(int gx, int gy, int gz) const
 {
     return oc_grid_->isInBounds(gx, gy, gz);
 }
 
 inline
-bool AdaptiveGrid3D::isInBounds(double wx, double wy, double wz) const
+bool SparseAdaptiveGrid3D::isInBounds(double wx, double wy, double wz) const
 {
     int gx, gy, gz;
     world2grid(wx, wy, wz, gx, gy, gz);
@@ -512,7 +503,7 @@ bool AdaptiveGrid3D::isInBounds(double wx, double wy, double wz) const
 }
 
 inline
-void AdaptiveGrid3D::addTrackingSphere(
+void SparseAdaptiveGrid3D::addTrackingSphere(
     const AdaptiveSphere3D &sphere,
     std::vector<Position3D> &modCells)
 {
